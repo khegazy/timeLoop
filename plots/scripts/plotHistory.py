@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 ##################################
 
 molecule = "CHO"
+dt = 0.25
 hist_dir = "../../output/history/" + molecule
 data_dir = "../../data/" + molecule
 
@@ -52,19 +53,28 @@ plt.close()
 print(dists_history.shape, dists_truth.shape)
 colors = ['r', 'b', 'g']
 atoms = ['C', 'H', 'O']
+tCut = 400
+tm = np.arange(tCut)*dt
+print("size",step_history.shape)
 for stp in range(step_history.shape[0]):
   ind = 0
   fig, ax = plt.subplots()
   for i in range(3):
     for j in range(i+1, 3):
       ax.plot(
+          tm,
           dists_truth[:400,i,j],
           c=colors[ind],
           label="{} - {}".format(atoms[i], atoms[j]))
       ax.plot(
+          tm,
           dists_history[stp,:400,i,j],
           c=colors[ind], linestyle=":")
       ind += 1
+  ax.set_xlim([tm[0], tm[-1]])
+  ax.set_xlabel("Time [fs]")
+  ax.set_ylabel(r"Pair Distance [$\AA$]")
   ax.legend()
+  fig.tight_layout()
   fig.savefig(os.path.join("..", molecule, "dists_train-{}.png".format(stp)))
   plt.close()
