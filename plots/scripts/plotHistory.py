@@ -33,7 +33,7 @@ with open(os.path.join(data_dir, "pairwise_distances.npy"), "rb") as file:
 
 losses = [
     "Diffraction Loss", "Pair Correlation Loss",
-    "Initial Conditions Loss"]
+    "Velocity Loss", "Initial Conditions Loss"]
 print(loss_history.shape)
 fig, ax = plt.subplots()
 for i,lss in enumerate(losses):
