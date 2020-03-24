@@ -40,7 +40,7 @@ metric = space.metric(displacement)
 metric = space.map_product(metric)
 
 def dist_metric(R):
-  return metric(R,R)
+  return metric(R,R+1e-6)
 
 dist_metric_td = vmap(dist_metric, (0))
 
@@ -120,6 +120,7 @@ def diffraction(dists, q, scat_weights):
   diffr_inds = np.logical_not(
       np.eye(scat_weights.shape[0], dtype=int).astype(bool))
 
+  print("INDS",onp.array(diffr_inds), dists[:2,diffr_inds])
   arg = np.expand_dims(dists[:,diffr_inds], axis=-1)*q
   calc = scat_weights[diffr_inds]*np.sin(arg)/arg
 

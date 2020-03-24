@@ -5,17 +5,21 @@ import jax as jax
 import jax.numpy as np
 from jax import jit, grad, random
 from jax.experimental import optimizers
+from jax_md import minimize
 
 import sys
 import os
+import glob
+import pickle as pl
 import numpy as onp
 import matplotlib.pyplot as plt
+from hashlib import blake2b
 
-from modules.flags import get_flags
+from modules.flags.flags_EM import get_flags
 from modules.data import get_data
 from modules.parameters import get_parameters
-from modules.diffraction import *
-from modules.losses import earth_movers_distance
+from modules.diffraction import * 
+from modules.losses import *
 
 FLAGS = get_flags()
 
@@ -30,77 +34,236 @@ def simulate_exp(init_geo, delta_geo, q, r, scat_weights):
   return mm_diffraction, pair_corr
 
 
-def diffraction_loss(diffraction_fit, diffraction_truth):
+def get_dependent_loss_fxns(FLAGS, parameters, init_geo):
+  
+  def diffraction_loss_EM(diffraction_fit, diffraction_truth):
+    return earth_movers_distance(diffraction_fit, diffraction_truth)
 
-  return np.mean((diffraction_fit - diffraction_truth)**2)
+  def diffraction_loss_L2(diffraction_fit, diffraction_truth):
+    return L2_loss(diffraction_fit, diffraction_truth)
 
-
-def pairCorr_loss(pairCorr_fit, pairCorr_truth):
-
-  #return earth_movers_distance(pairCorr_fit, pairCorr_truth)
-  return np.mean((pairCorr_fit - pairCorr_truth)**2)
-
-
-def velocity_loss(init_geo, delta_geo, v_scale, dt):
-
-  dists = dist_metric_td(init_geo + delta_geo)
-  velocity = (dists[1:] - dists[:-1])/(v_scale*dt)
-  return np.sum(velocity**2)
+  if False and FLAGS.loss_type == "EM":
+    diffraction_loss = diffraction_loss_EM
+  elif True or FLAGS.loss_type == "L2":
+    print("USING L2 DIFF")
+    diffraction_loss = diffraction_loss_L2
 
 
-def init_zero_loss(delta_geo):
+  def pairCorr_loss_EM(pairCorr_fit, pairCorr_truth):
+    return earth_movers_distance(pairCorr_fit, pairCorr_truth)
 
-  return np.sum(np.abs(delta_geo[0,:,:]))
+  def pairCorr_loss_L2(pairCorr_fit, pairCorr_truth):
+    return L2_loss(pairCorr_fit, pairCorr_truth)
+
+  if FLAGS.loss_type == "EM":
+    pairCorr_loss = pairCorr_loss_EM
+  elif FLAGS.loss_type == "L2":
+    pairCorr_loss = pairCorr_loss_L2
 
 
-def calculate_losses(
-    params, init_geo,
-    q, r, scat_weights,
-    v_scale, dt,
-    diffraction_truth, pairCorr_truth):
+  def velocity_loss(delta_geo):
+    dists = dist_metric_td(init_geo + delta_geo)
+    velocity = (dists[1:] - dists[:-1])/parameters["dt"]
+    return np.sum(np.square(velocity/FLAGS.velocity_scale))
 
-  delta_geo = params
+
+  def init_zero_loss(delta_geo):
+    return np.sum(np.square(delta_geo[0,:,:]))
+
+  return diffraction_loss, pairCorr_loss, velocity_loss, init_zero_loss
+
+
+def get_calculate_losses_fxn(FLAGS, parameters, init_geo, q, r, scat_weights):
+  
+  diffraction_loss, pairCorr_loss,\
+  velocity_loss, init_zero_loss = get_dependent_loss_fxns(
+      FLAGS, parameters, init_geo)
+
+  def calculate_losses(params, **kwargs):
+      
+    #print(kwargs)
+    diffraction_truth, pairCorr_truth = kwargs["truth"]
+    delta_geo = params
+      
+    diffraction_fit, pairCorr_fit = simulate_exp(
+        init_geo, delta_geo, q, r, scat_weights)
+
+    diffraction_loss_value  = diffraction_loss(
+        diffraction_fit, diffraction_truth)
+    pairCorr_loss_value     = pairCorr_loss(
+        pairCorr_fit, pairCorr_truth)
+    velocity_loss_value     = velocity_loss(delta_geo)
+    init_zero_loss_value    = init_zero_loss(delta_geo)
+
+    #print("CALCED LOSS", diffraction_loss_value, pairCorr_loss_value, velocity_loss_value, init_zero_loss_value)
+
+    return diffraction_loss_value,\
+        pairCorr_loss_value,\
+        velocity_loss_value,\
+        init_zero_loss_value
+
+  return calculate_losses
+
+
+def get_loss_fxn(FLAGS, parameters, init_geo, q, r, scat_weights):
+
+
+  calculate_losses = get_calculate_losses_fxn(
+      FLAGS, parameters, init_geo, q, r, scat_weights)
+
+
+  def loss(params, **kwargs):
     
-  diffraction_fit, pairCorr_fit = simulate_exp(init_geo, delta_geo, q, r, scat_weights)
+    loss_diffraction, loss_pairCorr, loss_velocity, loss_init_zero =\
+        calculate_losses(params, **kwargs)
 
-  diffraction_loss_value  = diffraction_loss(diffraction_fit, diffraction_truth)
-  pairCorr_loss_value     = pairCorr_loss(pairCorr_fit, pairCorr_truth)
-  velocity_loss_value     = velocity_loss(init_geo, delta_geo, v_scale, dt)
-  init_zero_loss_value    = init_zero_loss(delta_geo)
+    if FLAGS.debugging:
+      print("LOSS VAL", FLAGS.scale_diffraction_loss*loss_diffraction\
+        + FLAGS.scale_pairCorr_loss*loss_pairCorr\
+        + FLAGS.scale_init_zero_loss*loss_init_zero\
+        + FLAGS.scale_velocity_loss*loss_velocity)
+      return loss_diffraction
+    else:
+      return FLAGS.scale_diffraction_loss*loss_diffraction\
+        + FLAGS.scale_pairCorr_loss*loss_pairCorr\
+        + FLAGS.scale_init_zero_loss*loss_init_zero\
+        + FLAGS.scale_velocity_loss*loss_velocity
+  
+  if FLAGS.debugging:
+    return loss, calculate_losses
+  else:
+    return jax.jit(loss), jax.jit(calculate_losses)
 
-  return diffraction_loss_value,\
-      pairCorr_loss_value,\
-      velocity_loss_value,\
-      init_zero_loss_value
+
+#####  Save Fitting History  #####
+def save_training_history(
+    FLAGS, parameters, step,
+    step_history,
+    loss_history,
+    dists_history,
+    angle_history,
+    opt_state,
+    logging,
+    grad_mag_history=None):
 
 
-def loss(
-    params, init_geo,
-    q, r, scat_weights, 
-    v_scale, dt,
-    diffraction_truth, pairCorr_truth):
+  save_dir      = os.path.join(parameters["history_dir"], FLAGS.molecule)
+  flags_string  = str(FLAGS.flags_into_string())
+  flags_hash    = blake2b(flags_string.encode('utf-8'), digest_size=10).hexdigest()
+  prefix        = "flags-{}_step-{}_".format(flags_hash, step)
+  logging.info("Saving history for hash " + flags_hash)
 
-  loss_diffraction, loss_pairCorr, loss_velocity, loss_init_zero =\
-      calculate_losses(
-          params, init_geo,
-          q, r, scat_weights,
-          v_scale, dt,
-          diffraction_truth, pairCorr_truth)
+  flags_fileName = "flags-{}.txt".format(flags_hash)
+  if not os.path.exists(os.path.join(save_dir, flags_fileName)):
+    with open(os.path.join(save_dir, flags_fileName), "w") as file:
+      file.write(flags_string)
+  else:
+    search = "flags-{}".format(flags_hash)
+    prev_files = glob.glob(os.path.join(save_dir, search+"*.npy"))
+    if len(prev_files) == 0:
+      logging.fatal("Found {} but no other files".format(flags_fileName))
+  
+    prev_file = prev_files[0]
+    sInd = prev_file.find("step-") + 5
+    fInd = prev_file.find("_", sInd)
+    time = int(prev_file[sInd:fInd])
+    
+    if time < step:
+      # Remove older files
+      for fl in prev_files:
+        os.remove(fl)
+      os.remove(os.path.join(save_dir, "flags-{}_step-{}_{}".format(
+          flags_hash, time, "optimizer_state.pl")))
+    else:
+      logging.fatal("Trying to save old results that exist ({}), should import"\
+          .format(flags_hash))
 
-  return FLAGS.scale_diffraction_loss*loss_diffraction\
-      + FLAGS.scale_pairCorr_loss*loss_pairCorr\
-      + FLAGS.scale_init_zero_loss*loss_init_zero\
-      + FLAGS.scale_velocity_loss*loss_velocity
+
+  with open(os.path.join(save_dir, prefix+"step_history.npy"), "wb") as file:
+    np.save(file, np.array(step_history))
+
+  with open(os.path.join(save_dir, prefix+"loss_history.npy"), "wb") as file:
+    np.save(file, np.concatenate(loss_history))
+
+  with open(os.path.join(save_dir, prefix+"dists_history.npy"), "wb") as file:
+    np.save(file, np.concatenate(dists_history))
+
+  #with open(os.path.join(save_dir, prefix+"angle_history.npy"), "wb") as file:
+  #  np.save(file, np.concatenate(angle_history))
+ 
+  with open(os.path.join(save_dir, prefix+"optimizer_state.pl"), "wb") as file:
+    pl.dump(optimizers.unpack_optimizer_state(opt_state), file)
+
+  if grad_mag_history is not None:
+    with open(os.path.join(save_dir, prefix+"gradient_mags_history.npy"), "wb") as file:
+      np.save(file, np.array(grad_mag_history))
+
+
+
+#####  Retrieving Fitting History  #####
+def setup_fitting(
+    FLAGS,
+    parameters,
+    opt_init,
+    Npoints,
+    geo_shape,
+    logging):
+
+
+  save_dir      = os.path.join(parameters["history_dir"], FLAGS.molecule)
+  flags_string  = str(FLAGS.flags_into_string())
+  flags_hash    = blake2b(flags_string.encode('utf-8'), digest_size=10).hexdigest()
+
+  flags_fileName = "flags-{}.txt".format(flags_hash)
+  if not os.path.exists(os.path.join(save_dir, flags_fileName)):
+
+    #if FLAGS.debugging_opt is not None\
+    #    and os.path.exists(os.path.join(save_dir, flags_fileName)):
+    #  os.remove(os.path.join(save_dir, "flags-{}*".format(flags_hash)))
+
+    logging.info("Cannot find history for {} start from init.".format(flags_hash))
+    delta_geo = np.zeros((Npoints, geo_shape[0], geo_shape[1]))
+    opt_state = opt_init(delta_geo)
+    return 0, [], [], [], [], opt_state
+  else:
+    search = "flags-{}".format(flags_hash)
+    prev_files = glob.glob(os.path.join(save_dir, search+"*.npy"))
+    if len(prev_files) == 0:
+      logging.fatal("Found {} but no other files to import".format(
+          flags_fileName))
+  
+    prev_file = prev_files[0]
+    sInd = prev_file.find("step-") + 5
+    fInd = prev_file.find("_", sInd)
+    step = int(prev_file[sInd:fInd])
+    prefix = "flags-{}_step-{}_".format(flags_hash, step)
+
+   
+    print(os.path.join(save_dir, prefix+"step_history.npy"))
+    with open(os.path.join(save_dir, prefix+"step_history.npy"), "rb") as file:
+      step_history  = np.load(file).tolist()
+
+    with open(os.path.join(save_dir, prefix+"loss_history.npy"), "rb") as file:
+      loss_history  = [np.load(file)]
+
+    with open(os.path.join(save_dir, prefix+"dists_history.npy"), "rb") as file:
+      dists_history = [np.load(file)]
+
+    #with open(os.path.join(save_dir, prefix+"angle_history.npy"), "rb") as file:
+    #  angle_history = [np.load(file)]
+   
+    with open(os.path.join(save_dir, prefix+"optimizer_state.pl"), "rb") as file:
+      opt_state = optimizers.pack_optimizer_state(pl.load(file))
+
+    return step+1, step_history, loss_history, dists_history, [], opt_state
 
 
 
 def main(argv):
   logging.info("Running main")
 
-  print(FLAGS.leFlag)
-
   rng = random.PRNGKey(0)
-  diffraction_params = get_parameters()
+  parameters = get_parameters()
 
   step_history  = []
   loss_history  = []
@@ -111,56 +274,102 @@ def main(argv):
   #####  Get Data  #####
   ######################
 
-  init_geo, dists_data, angles_data, mmd_data, pairCorr_data = get_data(FLAGS)
-  print(init_geo, init_geo.shape)
+  init_geo, atom_positions,\
+  dists_data, angles_data,\
+  mmd_data, pairCorr_data = get_data(FLAGS, parameters)
   
-  q = get_Q(diffraction_params)
-  r = get_R(diffraction_params)
-  scat_amps, scat_weights = get_scattering_amps(diffraction_params, q)
+  q = get_Q(parameters)
+  r = get_R(parameters)
+  scat_amps, scat_weights = get_scattering_amps(parameters, q)
+
+
+  ###############################
+  #####  Get Loss Function  #####
+  ###############################
+
+  loss, calculate_losses = get_loss_fxn(
+      FLAGS, parameters, init_geo, q, r, scat_weights)
 
 
   #############################
   #####  Setup Optimizer  #####
   #############################
 
-  #opt_init, opt_update, get_params = optimizers.sgd(1)
-  opt_init, opt_update, get_params = optimizers.adam(1e-4)
+  if FLAGS.optimizer == "SGD":
+    opt_init, opt_update, get_params = optimizers.sgd(FLAGS.SGD_LR)
+  elif FLAGS.optimizer == "ADAM":
+    opt_init, opt_update, get_params = optimizers.adam(1e-4)
+  elif FLAGS.optimizer == "FIRE":
+    opt_init_, opt_update = minimize.fire_descent(loss, shift)
+    def opt_init(R, **kwargs):
+      return opt_init_(R + init_geo, **kwargs)
+    def get_params(opt_state):
+      R, V, F, ds, alpha, f = opt_state
+      return R - init_geo
+  else:
+    logging.fatal("Do not recognize opimizer{}".format(FLAGS.optimizer))
 
-  delta_geo = np.zeros((dists_data.shape[0], init_geo.shape[-2], init_geo.shape[-1]))
-  opt_state = opt_init(delta_geo)
 
-  @jit
-  def update(
-      stp, opt_state, init_geo,
-      q, r, scat_weights, 
-      v_scale, dt,
-      diffraction_truth, pairCorr_truth):
+  ###############################
+  #####  Setup Environment  #####
+  ###############################
+
+  print("SETTING UP ENV")
+  step, step_history,\
+  loss_history,\
+  dists_history,\
+  angle_history,\
+  opt_state = setup_fitting(
+      FLAGS, parameters, opt_init,
+      dists_data.shape[0],
+      (init_geo.shape[-2], init_geo.shape[-1]),
+      logging)
+
+  calc_grad_mags = False
+  if FLAGS.debugging_opt is not None:
+    if "init_to_data" in FLAGS.debugging_opt:
+      opt_state = opt_init(atom_positions - init_geo)
+    if "init_to_noisy_data" in FLAGS.debugging_opt:
+      init = atom_positions - init_geo
+      rng, k = random.split(rng)
+      opt_state = opt_init(init + random.normal(k, init.shape)*0.1)
+    if "calc_grad_mag" in FLAGS.debugging_opt:
+      print("HEREEREERERE")
+      calc_grad_mags = True
+      grad_mag_history = []
+
+  
+  gradient = grad(loss)
+  def update(stp, opt_state, **kwargs):
 
     params = get_params(opt_state)
-    return opt_update(
-        stp,
-        grad(loss)(
-            params, init_geo,
-            q, r, scat_weights,
-            v_scale, dt,
-            diffraction_truth, pairCorr_truth),
-        opt_state)
+  
+    if FLAGS.debugging:
+      gg = gradient(params, **kwargs)
+      print("SIZE", gg.shape)
+      print("GRADAS", gg)
+      sys.exit(0)
+      return opt_update(stp, gg, opt_state)
+    else:
+      return opt_update(stp, gradient(params, **kwargs), opt_state)
+  
+  if not FLAGS.debugging:
+    update = jit(update)
 
 
-  @jit
-  def asses_fit(
-      opt_state, init_geo,
-      q, r, scat_weights,
-      v_scale, dt,
-      diffraction_truth, pairCorr_truth):
+  def get_grad_mags(opt_state, history):
     
     params = get_params(opt_state)
+    history.append(np.sqrt(np.sum(np.square(params)))/params.shape[0])
+
+    return history
+
+
+  def asses_fit(opt_state, **kwargs):
+    params = get_params(opt_state)
+
     loss_diffraction, loss_pairCorr, loss_velocity, loss_init_zero =\
-      calculate_losses(
-          params, init_geo,
-          q, r, scat_weights,
-          v_scale, dt,
-          diffraction_truth, pairCorr_truth)
+        calculate_losses(params, **kwargs)
 
     loss_diffraction  *= FLAGS.scale_diffraction_loss
     loss_pairCorr     *= FLAGS.scale_pairCorr_loss
@@ -169,7 +378,11 @@ def main(argv):
     losses = [loss_diffraction, loss_pairCorr, loss_velocity, loss_init_zero]
 
     return np.sum(losses), losses
- 
+  
+  if not FLAGS.debugging:
+    asses_fit = jit(asses_fit)
+
+
 
   def append_history(stp, losses, delta_geo, init_geo):
     dists   = dist_metric_td(init_geo + delta_geo)
@@ -181,43 +394,60 @@ def main(argv):
     #angle_history.append(np.expand_dims(angles, 0))
 
  
+  data = (mmd_data, pairCorr_data)
 
-  for stp in range(15000):
-    print(stp)
+  # Evaluate initial conditions
+  params = get_params(opt_state)
+  loss_val, losses = asses_fit(opt_state, truth=data)
+
+  append_history(step, losses, params, init_geo)
+
+  log_info = "Step {}\tLoss {} / {}".format(step, loss_val, losses)
+  logging.info(log_info)
+
+  end_step = step + FLAGS.Nsteps
+  while step < end_step or FLAGS.Nsteps < 0:
+    #print("STARTING LOOP")
     params = get_params(opt_state)
-    opt_state = update(
-        stp, opt_state, init_geo,
-        q, r, scat_weights,
-        FLAGS.velocity_scale, diffraction_params["dt"],
-        mmd_data, pairCorr_data)
 
-    if stp % FLAGS.log_every == 0:
-      loss_val, losses = asses_fit(
-        opt_state, init_geo,
-        q, r, scat_weights,
-        FLAGS.velocity_scale, diffraction_params["dt"],
-        mmd_data, pairCorr_data)
+    #print("UPDATING")
+    opt_state = update(step, opt_state, truth=data)
+    step += 1
+    #print("FINISHED UPDATE")
 
-      append_history(stp, losses, params, init_geo)
+    if step % parameters["log_every"] == 0:
+      loss_val, losses, = asses_fit(opt_state, truth=data)
 
-      log_info = "Step {}\tLoss {} / {}".format(stp, loss_val, losses)
+      append_history(step, losses, params, init_geo)
+      if calc_grad_mags:
+        grad_mag_history = get_grad_mags(opt_state, grad_mag_history)
+
+      log_info = "Step {}\tLoss {} / {}".format(step, loss_val, losses)
       logging.info(log_info)
 
-  #####  Save Fitting History  #####
-  save_dir = os.path.join(FLAGS.history_dir, FLAGS.molecule)
-  with open(os.path.join(save_dir, "step_history.npy"), "wb") as file:
-    np.save(file, np.array(step_history))
-
-  with open(os.path.join(save_dir, "loss_history.npy"), "wb") as file:
-    np.save(file, np.concatenate(loss_history))
-
-  with open(os.path.join(save_dir, "dists_history.npy"), "wb") as file:
-    np.save(file, np.concatenate(dists_history))
-
-  #with open(os.path.join(save_dir, "angle_history.npy"), "wb") as file:
-  #  np.save(file, np.concatenate(angle_history))
+    if step % parameters["save_every"] == 0:
+      logging.info("Saving at step {}".format(step))
+      save_training_history(
+          FLAGS, parameters, step,
+          step_history,
+          loss_history,
+          dists_history,
+          angle_history,
+          opt_state,
+          logging,
+          grad_mag_history=grad_mag_history)
 
 
+  save_training_history(
+      FLAGS, parameters,
+      FLAGS.Nsteps,
+      step_history,
+      loss_history,
+      dists_history,
+      angle_history,
+      opt_state,
+      logging,
+      grad_mag_history=grad_mag_history)
 
 
 if __name__ == "__main__":

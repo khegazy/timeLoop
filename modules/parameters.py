@@ -1,7 +1,7 @@
 import os
 
 
-xSection_folder = "/media/kareem/09F434A51ACAE825/Research/experiments/timeLoop/data/scatteringXsections"
+xSection_folder = "./data/scatteringXsections"
 
 parameters = {
     "atoms" : {
@@ -31,10 +31,14 @@ parameters = {
               'N'         : 0
             }
       },
-    "atom_types": ["carbon", "hydrogen", "oxygen"],
-    "dt"        : 0.25,
-    "q"         : (10, 500),
-    "r"         : (5, 250)
+    "atom_types"  : ["carbon", "hydrogen", "oxygen"],
+    "dt"          : 0.25,
+    "q"           : (10, 250),
+    "r"           : (5, 100),
+    "data_dir"    : "data",
+    "log_every"   : 10,
+    "save_every"  : 250,#250000,
+    "history_dir" : os.path.join("output", "history")
 }
 
 
