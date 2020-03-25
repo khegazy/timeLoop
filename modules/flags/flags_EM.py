@@ -32,34 +32,34 @@ def get_flags():
 
   flags.DEFINE_string(
       "loss_type", "EM",
-      "Indicate which loss to use for diffraction and PC: L2=0, EM=1.")
+      "Indicate which loss to use for diffraction and PC.")
 
   flags.DEFINE_float(
-      "scale_diffraction_loss", 5,#1e-4,
+      "scale_diffraction_loss", 1e1,#1e-4,
       "Scaling hyperparameter for the diffraction loss contribution.")
 
   flags.DEFINE_float(
-      "scale_pairCorr_loss", 4e-2,
+      "scale_pairCorr_loss", 6e3,
       "Scaling hyperparameter for the pair correlation loss contribution.")
 
   flags.DEFINE_float(
-      "scale_init_zero_loss", 1,
+      "scale_init_zero_loss", 1e2,
       "Scaling hyperparameter for the init zero loss contribution.")
 
   flags.DEFINE_float(
-      "scale_velocity_loss", 1e-7,
-      "Scaling hyperparameter for the velocity loss contribution.")
+      "scale_momentum_loss", 3e-6,
+      "Scaling hyperparameter for the momentum loss contribution.")
 
   flags.DEFINE_float(
-      "velocity_scale", 0.1,
-      "Characteristic velocity in A/fs for the velocity loss.")
+      "momentum_scale", 0.05,
+      "Characteristic momentum in A*AU/fs for the momentum loss.")
 
   flags.DEFINE_boolean(
       "debugging", False,
       "Debugging option that defines what debugging study to do.")
 
   flags.DEFINE_string(
-      "debugging_opt", "init_to_noisy_data,calc_grad_mags",
+      "debugging_opt", "calc_grad_mags",#"init_to_noisy_data,calc_grad_mags",
       "Debugging option that defines what debugging study to do.")
 
   return FLAGS

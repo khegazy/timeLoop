@@ -36,6 +36,9 @@ def make_plot(istp,
     timeCut, colors, atoms, plot_dir):
 
 
+  if istp % 10 != 0:
+    return
+
   stp = step_history[istp]
   print("Plotting time {}".format(istp))
 
@@ -50,6 +53,7 @@ def make_plot(istp,
   axs[0,0].plot(step_history[:istp], onp.sum(loss_history[:istp,:], axis=1), 
       '-k', label="Total Loss")
   axs[0,0].set_xlim(step_history[0], step_history[istp])
+  #axs[0,0].set_xscale('log')
   axs[0,0].set_yscale('log')
   axs[0,0].legend()
 
@@ -147,7 +151,7 @@ def main(argv):
 
   losses  = [
       "Diffraction Loss", "Pair Correlation Loss",
-      "Velocity Loss", "Initial Conditions Loss"]
+      "Momentum Loss", "Initial Conditions Loss"]
   colors  = ['r', 'b', 'g']
   atoms   = ['C', 'H', 'O']
   timeCut = 400
@@ -177,7 +181,8 @@ def main(argv):
 
 
   #####  Run with Multiprocessing  #####
-  pool = Pool(processes=20)
+  pool = Pool(processes=40)
+  plt_inds = np.arange(len(step_history)/5)*5
   res = pool.map(partial(make_plot, 
     q=q, r=r,
     scat_weights=scat_weights,

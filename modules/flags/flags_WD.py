@@ -31,15 +31,15 @@ def get_flags():
       "Learning rate for SGD.")
 
   flags.DEFINE_string(
-      "loss_type", "L2",
+      "loss_type", "WD",
       "Indicate which loss to use for diffraction and PC.")
 
   flags.DEFINE_float(
-      "scale_diffraction_loss", 10,
+      "scale_diffraction_loss", 1e1,#1e-4,
       "Scaling hyperparameter for the diffraction loss contribution.")
 
   flags.DEFINE_float(
-      "scale_pairCorr_loss", 0.1,
+      "scale_pairCorr_loss", 3e2,
       "Scaling hyperparameter for the pair correlation loss contribution.")
 
   flags.DEFINE_float(
@@ -56,7 +56,7 @@ def get_flags():
 
   flags.DEFINE_boolean(
       "debugging", False,
-      "Generic debugging option.")
+      "Debugging option that defines what debugging study to do.")
 
   flags.DEFINE_string(
       "debugging_opt", "init_to_noisy_data,calc_grad_mags",

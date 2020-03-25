@@ -55,28 +55,43 @@ def get_dependent_loss_fxns(FLAGS, parameters, init_geo):
   def pairCorr_loss_L2(pairCorr_fit, pairCorr_truth):
     return L2_loss(pairCorr_fit, pairCorr_truth)
 
+  def pairCorr_loss_WD(pairCorr_fit, pairCorr_truth):
+    return wasserstein_distance(pairCorr_fit, pairCorr_truth, get_R(parameters))
+
   if FLAGS.loss_type == "EM":
     pairCorr_loss = pairCorr_loss_EM
   elif FLAGS.loss_type == "L2":
     pairCorr_loss = pairCorr_loss_L2
+  elif FLAGS.loss_type == "WD":
+    pairCorr_loss = pairCorr_loss_WD
 
 
-  def velocity_loss(delta_geo):
-    dists = dist_metric_td(init_geo + delta_geo)
-    velocity = (dists[1:] - dists[:-1])/parameters["dt"]
-    return np.sum(np.square(velocity/FLAGS.velocity_scale))
+  def momentum_loss(delta_geo):
+    #dists = dist_metric_td(init_geo + delta_geo)
+    #velocity = (dists[1:] - dists[:-1])/parameters["dt"]
+    #return np.sum(np.square(velocity/FLAGS.momentum_scale))
+
+    velocity2 = np.sum(np.square(delta_geo[1:,:,:] - delta_geo[:-1,:,:]))
+    velocity2 /= parameters["dt"]**2
+    momentum2 = velocity2*np.expand_dims(
+        np.expand_dims(np.square(parameters["atom_masses"]), 0),
+        0)
+
+    momentum2 /= FLAGS.momentum_scale**2
+
+    return np.mean(momentum2)
 
 
   def init_zero_loss(delta_geo):
     return np.sum(np.square(delta_geo[0,:,:]))
 
-  return diffraction_loss, pairCorr_loss, velocity_loss, init_zero_loss
+  return diffraction_loss, pairCorr_loss, momentum_loss, init_zero_loss
 
 
 def get_calculate_losses_fxn(FLAGS, parameters, init_geo, q, r, scat_weights):
   
   diffraction_loss, pairCorr_loss,\
-  velocity_loss, init_zero_loss = get_dependent_loss_fxns(
+  momentum_loss, init_zero_loss = get_dependent_loss_fxns(
       FLAGS, parameters, init_geo)
 
   def calculate_losses(params, **kwargs):
@@ -92,14 +107,14 @@ def get_calculate_losses_fxn(FLAGS, parameters, init_geo, q, r, scat_weights):
         diffraction_fit, diffraction_truth)
     pairCorr_loss_value     = pairCorr_loss(
         pairCorr_fit, pairCorr_truth)
-    velocity_loss_value     = velocity_loss(delta_geo)
+    momentum_loss_value     = momentum_loss(delta_geo)
     init_zero_loss_value    = init_zero_loss(delta_geo)
 
-    #print("CALCED LOSS", diffraction_loss_value, pairCorr_loss_value, velocity_loss_value, init_zero_loss_value)
+    #print("CALCED LOSS", diffraction_loss_value, pairCorr_loss_value, momentum_loss_value, init_zero_loss_value)
 
     return diffraction_loss_value,\
         pairCorr_loss_value,\
-        velocity_loss_value,\
+        momentum_loss_value,\
         init_zero_loss_value
 
   return calculate_losses
@@ -114,20 +129,22 @@ def get_loss_fxn(FLAGS, parameters, init_geo, q, r, scat_weights):
 
   def loss(params, **kwargs):
     
-    loss_diffraction, loss_pairCorr, loss_velocity, loss_init_zero =\
+    loss_diffraction, loss_pairCorr, loss_momentum, loss_init_zero =\
         calculate_losses(params, **kwargs)
 
     if FLAGS.debugging:
       print("LOSS VAL", FLAGS.scale_diffraction_loss*loss_diffraction\
         + FLAGS.scale_pairCorr_loss*loss_pairCorr\
         + FLAGS.scale_init_zero_loss*loss_init_zero\
-        + FLAGS.scale_velocity_loss*loss_velocity)
-      return loss_diffraction
-    else:
-      return FLAGS.scale_diffraction_loss*loss_diffraction\
+        + FLAGS.scale_momentum_loss*loss_momentum)
+      print("LOSS VAL", FLAGS.scale_diffraction_loss*loss_diffraction,
+        FLAGS.scale_pairCorr_loss*loss_pairCorr,
+        FLAGS.scale_init_zero_loss*loss_init_zero,
+        FLAGS.scale_momentum_loss*loss_momentum)
+    return FLAGS.scale_diffraction_loss*loss_diffraction\
         + FLAGS.scale_pairCorr_loss*loss_pairCorr\
         + FLAGS.scale_init_zero_loss*loss_init_zero\
-        + FLAGS.scale_velocity_loss*loss_velocity
+        + FLAGS.scale_momentum_loss*loss_momentum
   
   if FLAGS.debugging:
     return loss, calculate_losses
@@ -174,6 +191,8 @@ def save_training_history(
         os.remove(fl)
       os.remove(os.path.join(save_dir, "flags-{}_step-{}_{}".format(
           flags_hash, time, "optimizer_state.pl")))
+    elif time == step:
+      logging.info("File at the same time already exists.")
     else:
       logging.fatal("Trying to save old results that exist ({}), should import"\
           .format(flags_hash))
@@ -334,7 +353,6 @@ def main(argv):
       rng, k = random.split(rng)
       opt_state = opt_init(init + random.normal(k, init.shape)*0.1)
     if "calc_grad_mag" in FLAGS.debugging_opt:
-      print("HEREEREERERE")
       calc_grad_mags = True
       grad_mag_history = []
 
@@ -346,9 +364,7 @@ def main(argv):
   
     if FLAGS.debugging:
       gg = gradient(params, **kwargs)
-      print("SIZE", gg.shape)
-      print("GRADAS", gg)
-      sys.exit(0)
+      print("GRADAS", gg[0])
       return opt_update(stp, gg, opt_state)
     else:
       return opt_update(stp, gradient(params, **kwargs), opt_state)
@@ -368,14 +384,14 @@ def main(argv):
   def asses_fit(opt_state, **kwargs):
     params = get_params(opt_state)
 
-    loss_diffraction, loss_pairCorr, loss_velocity, loss_init_zero =\
+    loss_diffraction, loss_pairCorr, loss_momentum, loss_init_zero =\
         calculate_losses(params, **kwargs)
 
     loss_diffraction  *= FLAGS.scale_diffraction_loss
     loss_pairCorr     *= FLAGS.scale_pairCorr_loss
-    loss_velocity     *= FLAGS.scale_velocity_loss
+    loss_momentum     *= FLAGS.scale_momentum_loss
     loss_init_zero    *= FLAGS.scale_init_zero_loss
-    losses = [loss_diffraction, loss_pairCorr, loss_velocity, loss_init_zero]
+    losses = [loss_diffraction, loss_pairCorr, loss_momentum, loss_init_zero]
 
     return np.sum(losses), losses
   

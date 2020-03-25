@@ -11,7 +11,7 @@ from hashlib import blake2b
 from multiprocessing import Pool
 
 from modules.parameters import get_parameters
-from modules.flags.flags_EM import get_flags
+from modules.flags.flags_WD import get_flags
 from modules.diffraction import *
 
 
@@ -106,7 +106,7 @@ def main(argv):
 
   losses  = [
       "Diffraction Loss", "Pair Correlation Loss",
-      "Velocity Loss", "Initial Conditions Loss"]
+      "Momentum Loss", "Initial Conditions Loss"]
   colors  = ['r', 'b', 'g']
   atoms   = ['C', 'H', 'O']
 
