@@ -40,7 +40,7 @@ metric = space.metric(displacement)
 metric = space.map_product(metric)
 
 def dist_metric(R):
-  return metric(R,R)
+  return metric(R,R+1e-6)
 
 dist_metric_td = vmap(dist_metric, (0))
 
@@ -61,6 +61,28 @@ def angle_metric(R):
 def angle_metric_td(R):
   dR = dist_metric_td(R)
   calc_angle_vm_td(dR, dR)
+
+
+########################
+#####  Kinematics  #####
+########################
+
+def calc_kinematics(positions, masses, dt):
+  velocity = (positions[1:] - positions[:-1])/dt
+  vShape = velocity.shape
+  velocity = np.concatenate([np.zeros([1, vShape[1], vShape[2]]), velocity], axis=0)
+
+  acceleration = (velocity[1:] - velocity[:-1])/dt
+  acceleration = np.concatenate([np.zeros([1, vShape[1], vShape[2]]), acceleration], axis=0)
+
+  momentum = velocity*np.expand_dims(
+      np.expand_dims(masses, 0), 0)
+  force = acceleration*np.expand_dims(
+      np.expand_dims(masses, 0), 0)
+
+  expected_position = positions + velocity*dt + 0.5*acceleration*dt**2
+
+  return velocity, momentum, acceleration, force, expected_position
 
 
 #############################
@@ -120,6 +142,7 @@ def diffraction(dists, q, scat_weights):
   diffr_inds = np.logical_not(
       np.eye(scat_weights.shape[0], dtype=int).astype(bool))
 
+  #print("INDS",onp.array(diffr_inds), dists[:2,diffr_inds])
   arg = np.expand_dims(dists[:,diffr_inds], axis=-1)*q
   calc = scat_weights[diffr_inds]*np.sin(arg)/arg
 
