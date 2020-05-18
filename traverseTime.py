@@ -66,6 +66,11 @@ def get_dependent_loss_fxns(FLAGS, parameters, init_geo):
     pairCorr_loss = pairCorr_loss_WD
 
 
+    return diffraction_loss_value,\
+        pairCorr_loss_value,\
+        momentum_loss_value,\
+        init_zero_loss_value
+
   def kinematic_loss(delta_geo):
     #dists = dist_metric_td(init_geo + delta_geo)
     #velocity = (dists[1:] - dists[:-1])/parameters["dt"]
@@ -540,7 +545,6 @@ def main(argv):
 
     print(3)
 
-
     losses = losses*kwargs["loss_scales"]
     #losses = [loss_diffraction, loss_pairCorr, loss_init_zero, loss_momentum, loss_force]
     print("4")
@@ -551,7 +555,6 @@ def main(argv):
   
   if not FLAGS.debugging:
     asses_fit = jit(asses_fit)
-
 
 
   def append_history(stp, losses, opt_state, init_geo, Ntimes=None):

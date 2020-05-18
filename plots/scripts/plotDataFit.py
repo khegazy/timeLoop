@@ -188,7 +188,6 @@ def make_plot(istp,
 
 
 
-
   #fig.tight_layout()
   fig.savefig(
       os.path.join(plot_dir, "dataFit_{}.png".format(stp)))
